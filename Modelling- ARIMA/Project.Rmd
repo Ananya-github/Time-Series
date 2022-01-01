@@ -1,0 +1,1108 @@
+---
+title: "Time Series Forecasting"
+output:
+  html_document:
+    df_print: paged
+---
+```{r}
+#install.packages("knitr")
+library(knitr)
+#install.packages("rmarkdown")
+library(rmarkdown)
+```
+
+```{r include=FALSE}
+#install.packages(("dplyr"))
+library(dplyr)
+
+#install.packages(("tsibble"))
+library(tsibble)
+#install.packages("xts")
+library(xts)
+#install.packages("ggplot2")
+library(ggplot2)
+library(reshape)
+library(reshape2)
+library(tidyr)
+library(tidyverse)
+library(data.table)
+library(zoo)
+library(bizdays)
+library(ggeasy)
+library(harrypotter)
+library(bizdays)
+library(timeDate)
+library(astsa)
+library(fpp2)
+
+# Visualizations
+library(ggplot2)
+library(plotly)
+library(MASS)
+library(dplyr)
+
+library(magrittr)
+library(forecast)
+library(feasts)
+library(GGally)
+library(fpp2)
+require(stats)
+library(uroot)
+install.packages('fable')
+library(fable)
+
+library(lubridate)
+library(zoo)
+library(magrittr)
+library(forecast)
+#install.packages("feasts")
+library(feasts)
+#install.packages("GGally")
+library(GGally)
+library(fpp2)
+
+```
+
+# Problem Statement 
+
+Neo Bank of India (a fictional bank) receives a lot of requests for its various finance offerings that include housing loans, two-wheeler loans, real estate financing, and microloans. The number of applications received is something that varies a lot with the season. Going through these applications is a manual and tedious process.
+
+Accurately forecasting the number of cases received can help with resource and manpower management resulting in quick response on applications and more efficient processing.
+You have been appointed with the task of forecasting daily cases for the next 1 month for 2 different business segments aggregated at the country level keeping in consideration the following major Indian festivals (inclusive but not exhaustive list): Diwali, Dussehra, Ganesh Chaturthi, Navratri, Holi, etc.
+
+# Data
+
+The dataset is divided into 2 components, namely train data and test data. The training data consists of dependent variables such as date of application (application_date), business segment (segment 1 or 2), anonymized id for a branch at which application was received (branch_id), State in which application was received (state), zone of state in which application was received (zone). The target variable here is the number of cases/applications received (no_of_applicants).
+
+The test data consists of a unique id for each sample in the test set (id), Date of application (application_date), business segment (segment). 
+
+Sample submission consists of id with the number of applicants forecasted for next month for business segments 1 and 2.
+
+
+# Evaluation Metrics
+
+Evaluation for the given case is MAPE - Mean Absolute Percentage Error
+
+
+# Data Preprocessing
+
+In the given data as a part of pre-processing we divide the data based on the business segments to analyze them individually for the missing values we use Interpolation to fill in the missing values.We combined the dataset with Holiday dataset downloaded from Kaggle through left join. This final dataset is used for further analysis. The Holiday dataset consists of all the Indian holidays for a period of 2017 to 2019.The data type of the Application date is also modified to 'datetime' type and the dataframes for indovidual segments are converted to 'tsibble' object for time series analysis.
+
+
+
+# Exploratory Data Analysis
+
+Overall we observe that the data from the period 2017 to 2019 tends to be seasonal with peaks during the mid-months.The number of applicants in 2017 and early 2019 tend to be comparatively low and inconsistent with the trend observed during the late-2017 and the year 2018, this may be due to the recovery from the demonetization in November-2016.This  inconsistent data may lead to noise while forecasting.
+On dividing based on segments 
+```{r include=FALSE}
+#Reading the files for test and train
+train = read.csv("train.csv")
+test = read.csv("test.csv")
+
+holiday=read.csv("indian_holidays.csv")
+colnames(holiday)<-c("application_date","Holiday")
+train<- train %>% left_join(holiday,by="application_date")
+train$application_date=as.Date(train$application_date, "%d-%m-%Y")
+summary(train)
+```
+```{r include= FALSE}
+train
+```
+
+```{r include= FALSE}
+train$Holiday <- train$Holiday %>% replace_na('0')
+
+train
+```
+
+
+```{r include=FALSE}
+#Converting application date into date format.
+train$application_date<-as.Date(train$application_date,format = "%d-%m-%Y")
+train$segment<-as.character(train$segment)
+# # converting holiday data into date format
+# train_holidays$application_date<-as.Date(train$application_date,format = "%d-%m-%Y")
+# train_holidays$segment<-as.character(train$segment)
+str(train)
+```
+```{r include=FALSE}
+colnames(train)
+```
+```{r echo= FALSE, include=FALSE}
+#Replacing values for certain columns 
+# train$zone %>% replace_na("Not Specified")
+# train$state %>% replace_na("Not Specified")
+# train$branch_id %>% replace_na("Not Specified")
+```
+
+
+```{r include=FALSE}
+#Adding additional columns of date, month and year 
+train$Day<-format(train$application_date,"%d")
+train$Month<-format(train$application_date,"%m")
+train$Year<-format(train$application_date,"%Y")
+train
+
+
+
+# colSums(sapply(train, is.na))
+# train <- na.omit(train)
+# train %>% distinct()
+# 
+# #Converting to tsibble
+# train <- train%>%
+#   mutate(Quarter = yearquarter(Date)) %>%
+#   select(-Date) %>%
+#   as_tsibble(key = c(segment,branch_id,no_of_applicants),
+#              index = Quarter)
+# #Converting to time series object
+# #train_ts <- xts(train$no_of_applicants,train$application_date)
+# #train_ts
+# #Null values ijn each column
+
+
+
+```
+```{r include=FALSE}
+#Removing rows with any missing values 
+#train <- train[complete.cases(train), ]
+train
+```
+```{r include=FALSE}
+dim(train)
+```
+```{r include=FALSE}
+#Splitting the dataframe based on segment
+Segment1 <- train%>% filter(segment== '1')
+View(Segment1)
+Segment2 <- train%>% filter(segment== '2')
+View(Segment2)
+```
+```{r include=FALSE}
+#Removing rows with any missing values 
+train_ts <- train[complete.cases(train), ]
+```
+
+```{r include=FALSE}
+#Changing the dataframe to s time series object
+train_ts<- train_ts %>%
+  mutate(Quarter = yearquarter(application_date)) %>%
+  as_tsibble(key = c(segment,branch_id,state,zone,no_of_applicants,Day,Month,Year,Holiday),
+             index = Quarter)
+
+
+```
+```{r include=FALSE}
+# train_ts <- xts(train$no_of_applicants,train$Date)
+class(train_ts)
+dim(train_ts)
+```
+
+
+```{r warning=FALSE,include=FALSE}
+fig <- plot_ly(train, type = 'scatter', mode = 'lines')%>%
+  add_trace(x = ~application_date, y = ~no_of_applicants)%>%
+  layout(showlegend = F, width=600)
+fig <- fig %>%
+  layout(
+         xaxis = list(zerolinecolor = '#ffff',
+                      zerolinewidth = 2,
+                      gridcolor = 'ffff'),
+         yaxis = list(zerolinecolor = '#ffff',
+                      zerolinewidth = 2,
+                      gridcolor = 'ffff'),
+         plot_bgcolor='#e5ecf6', width = 800)
+```
+
+
+```{r warning=FALSE, include=FALSE}
+#fig
+```
+```{r include=FALSE}
+# fig <- plot_ly()%>%
+#   add_trace(data = train, type = 'scatter', mode = 'lines', fill = 'tozeroy', x = ~application_date, y = ~no_of_applicants, name = 'No.of applicants')%>%
+#   layout(showlegend = F,
+#           zerolinecolor = '#ffff',
+#                       zerolinewidth = 2,
+#                       gridcolor = 'ffff'),
+#          xaxis = list(zerolinecolor = '#ffff',
+#                       zerolinewidth = 2,
+#                       gridcolor = 'ffff'),
+#          plot_bgcolor='#e5ecf6')
+# options(warn = -1)
+# fig <- fig %>%
+#   layout(
+#          xaxis = list(zerolinecolor = '#ffff',
+#                       zerolinewidth = 2,
+#                       gridcolor = 'ffff'),
+#          yaxis = list(zerolinecolor = '#ffff',
+#                       zerolinewidth = 2,
+#                       gridcolor = 'ffff'),
+#          plot_bgcolor='#e5ecf6', width = 1000)
+# 
+# 
+# fig
+```
+
+```{r include=FALSE}
+#Count based on zone, state,segment and date
+
+zone_count<- count(train,zone)
+# View(zone_count)
+
+zone_count_plot <- plot_ly(zone_count, x=~zone, y = ~n, type = 'bar',name = ~zone,
+text = ~n, textposition = 'auto', width = 1.5)
+zone_count_plot <- zone_count_plot  %>% layout(title = "ZONE COUNT",
+xaxis = list(title = "ZONE"),
+yaxis = list(title = "NO.OF APPLICANTS"))
+
+
+#State
+
+state_count<- count(train,state)
+#View(state_count)
+
+state_count_plot <- plot_ly(state_count, x=~state, y = ~n, type = 'bar',name = ~state,
+text = ~n, textposition = 'auto', width = 1)
+state_count_plot <- state_count_plot  %>% layout(title = "STATE COUNT",
+xaxis = list(title = "STATE",tickangle = 90),
+yaxis = list(title = "NO.OF APPLICANTS"))
+
+#state_count_plot 
+#Segment
+
+segment_count<- count(train,segment)
+#View(segment_count)
+
+segment_count_plot <-plot_ly(segment_count, labels = ~segment, values = ~n, type = 'pie')
+segment_count_plot <- segment_count_plot %>% layout(title = 'OVERALL SEGMENT DISTRIBUTION',
+xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+```
+
+We observe that majority of the applications belong to Segment 1 and the zone to receive highest number of applications is the East zone. It is observed that the state of Maharashtra has highest number of application across is branches from 2017-2019.
+```{r}
+
+
+segment_count_plot 
+zone_count_plot
+```
+```{r warning=FALSE,include=FALSE}
+ggplot(train, aes(x =train$application_date, y = train$no_of_applicants, color = ~segment)) +
+  geom_area(colour = "black", size = .2, alpha = .4) +
+  scale_fill_brewer(palette = "Blues")
+```
+
+```{r warning=FALSE,include=FALSE}
+fig <- plot_ly(train,x =train$application_date, y = train$no_of_applicants, color = ~segment) 
+fig <- fig %>% add_lines()
+
+fig
+```
+```{r include=FALSE}
+train
+```
+
+```{r warning = FALSE, message= FALSE, echo=FALSE,include=FALSE}
+#Group by data on the basis of application_date,segment and sum no_of_applicants.
+
+data_grp<-train %>% group_by(application_date,segment,Holiday) %>% 
+       summarise(no_of_applicants_sum  = mean(no_of_applicants))
+View(data_grp)
+```
+```{r echo=FALSE,include=FALSE}
+## Create two dataframes
+
+#Filter data frames based on segment, then convert them into tsibble for segment 1
+data_1<-data_grp %>% filter(segment %in% c(1))
+data_1<-data_1 %>%mutate(application_date = as.Date(application_date)) %>%
+  as_tsibble(index = application_date)
+```
+
+
+```{r include=FALSE}
+#For segment 1, fill gaps for missing values
+
+
+
+hh<- data.frame(application_date=seq(min(data_1$application_date), max(data_1$application_date), by="days"))
+data_1 <- merge(data_1,hh,by.x='application_date',by.y='application_date',all.x=T,all.y=T)
+data_1$segment[is.na(data_1$segment)] <- 1
+data_1$segment <- NULL
+head(data_1)
+data_1<-data_1 %>%mutate(application_date = as.Date(application_date)) %>%
+  as_tsibble(index = application_date)
+is_tsibble(data_2)
+```
+
+
+```{r echo=FALSE, include=FALSE}
+#For segment 1, interpolation for missing values of number of applicants
+
+x <- zoo(data_1$no_of_applicants_sum,data_1$application_date)
+x <- as.ts(round(x))
+data_1$no_of_applicants_sum <- na.interp(round(x))
+is_tsibble(data_1)
+
+
+```
+```{r include=FALSE}
+#Filter dataframes based on segment, then convert them into tsibble for segment 2
+data_2<-data_grp %>% filter(segment %in% c(2))
+data_2<-data_2 %>%mutate(application_date = as.Date(application_date)) %>%
+  as_tsibble(index = application_date)
+
+```
+
+
+```{r include=FALSE}
+#For segment 2, fill gaps for missing values
+
+
+hh<- data.frame(application_date=seq(min(data_2$application_date), max(data_2$application_date), by="days"))
+data_2 <- merge(data_2,hh,by.x='application_date',by.y='application_date',all.x=T,all.y=T)
+data_2$segment[is.na(data_2$segment)] <- 1
+data_2$segment <- NULL
+head(data_2)
+data_2<-data_2 %>%mutate(application_date = as.Date(application_date)) %>%
+  as_tsibble(index = application_date)
+is_tsibble(data_2)
+```
+
+
+
+```{r include=FALSE}
+#For segment 2, interpolation for missing values of number of applicants
+
+x <- zoo(data_2$no_of_applicants_sum,data_2$application_date)
+x <- as.ts(round(x))
+data_2$no_of_applicants_sum <- na.interp(round(x))
+is_tsibble(data_2)
+
+```
+
+
+```{r include= FALSE}
+sum(is.na(data_1))
+sum(is.na(data_2))
+```
+```{r}
+
+data_grpp<-train %>% group_by(application_date,segment) %>% 
+       summarise(no_of_applicants_sum  = mean(no_of_applicants))
+View(data_grpp)
+
+#Filter data frames based on segment, then convert them into tsibble for segment 1
+data_11<-data_grpp %>% filter(segment %in% c(1))
+data_11<-data_11 %>%mutate(application_date = as.Date(application_date)) %>%
+  as_tsibble(index = application_date)
+```
+
+
+```{r include=FALSE}
+#For segment 1, fill gaps for missing values
+
+
+
+hh<- data.frame(application_date=seq(min(data_11$application_date), max(data_11$application_date), by="days"))
+data_11 <- merge(data_11,hh,by.x='application_date',by.y='application_date',all.x=T,all.y=T)
+data_11$segment[is.na(data_11$segment)] <- 1
+data_11$segment <- NULL
+head(data_11)
+data_11<-data_11 %>%mutate(application_date = as.Date(application_date)) %>%
+  as_tsibble(index = application_date)
+is_tsibble(data_11)
+```
+
+
+```{r echo=FALSE, include=FALSE}
+#For segment 1, interpolation for missing values of number of applicants
+
+x <- zoo(data_11$no_of_applicants_sum,data_11$application_date)
+x <- as.ts(round(x))
+data_11$no_of_applicants_sum <- na.interp(round(x))
+is_tsibble(data_11)
+
+
+```
+```{r include=FALSE}
+#Filter dataframes based on segment, then convert them into tsibble for segment 2
+data_22<-data_grpp %>% filter(segment %in% c(2))
+data_22<-data_22 %>%mutate(application_date = as.Date(application_date)) %>%
+  as_tsibble(index = application_date)
+
+```
+
+
+```{r include=FALSE}
+#For segment 2, fill gaps for missing values
+
+
+hhh<- data.frame(application_date=seq(min(data_22$application_date), max(data_22$application_date), by="days"))
+data_22 <- merge(data_22,hh,by.x='application_date',by.y='application_date',all.x=T,all.y=T)
+data_22$segment[is.na(data_22$segment)] <- 1
+data_22$segment <- NULL
+head(data_22)
+data_22<-data_22 %>%mutate(application_date = as.Date(application_date)) %>%
+  as_tsibble(index = application_date)
+is_tsibble(data_22)
+```
+
+
+
+```{r include=FALSE}
+#For segment 2, interpolation for missing values of number of applicants
+
+xx<- zoo(data_22$no_of_applicants_sum,data_22$application_date)
+xx <- as.ts(round(x))
+data_22$no_of_applicants_sum <- na.interp(round(x))
+is_tsibble(data_22)
+
+```
+
+
+```{r include= FALSE}
+sum(is.na(data_1))
+sum(is.na(data_2))
+```
+Checking for seasonality, trend and cycles
+
+The below graph shows the number of application against the time period between 2017-19 under segment 1.We notice that the data tends to be stationary with outliers in the region between 2017-2018.Though this a visual conclusion the hypothesis can be validated by testing for stationarity using the ADF(Augmented Dicker-Fuller)Test.
+Between the period 2017-2018 we observe a linear trend in number of applications received.The trend doesn't persist for a long time since there is a sudden deceleration in the number of applications during April to  May-2018. The applications received follows a cyclical pattern which are usually generated by the autoregressive structure of the series.
+```{r echo=FALSE}
+
+# # 1. Time plots 
+# 
+autoplot(data_1, no_of_applicants_sum) +
+ labs(y = "Total number of applications",
+      title = "Number of applications in Neo bank for Segment 1")
+```
+```{r}
+data_1%>%
+  gg_season(no_of_applicants_sum, period="year") +
+  labs(y = "Total number of applications",
+       title = "Yearly Seasonal plot: Number of applications in Neo bank")
+```
+
+
+
+Compared to the Segment 1 , the number of applications received under Segment 2 are most consistent over the given periods and it follows strict cyclical pattern.We observe a monthly seasonality with highest number of applicants during the middle of the months.
+
+
+
+```{r}
+ autoplot(data_2, no_of_applicants_sum) +
+   labs(y = "Total number of applications",
+       title = "Number of applications in Neo bank for Segment 2")
+```
+
+
+```{r echo=FALSE,warning=FALSE,message=FALSE, include=FALSE}
+data_1 %>%
+  gg_season(no_of_applicants_sum, period="week") +
+  labs(y = "Total number of applications",
+       title = "Weekly Seasonal plot: Number of applications in Neo bank")
+```
+```{r include=FALSE}
+data_2 %>%
+  gg_season(no_of_applicants_sum, period="week") +
+  labs(y = "Total number of applications",
+       title = "Weekly Seasonal plot: Number of applications in Neo bank")
+```
+
+
+```{r}
+# b) Yearly seasonality
+
+train_ts %>%
+  gg_season(no_of_applicants, period="year") +
+  labs(y = "Total number of applications",
+       title = "Yearly Seasonal plot: Number of applications in Neo bank")
+```
+
+
+```{r}
+data_2%>%
+  gg_season(no_of_applicants_sum, period="year") +
+  labs(y = "Total number of applications",
+       title = "Yearly Seasonal plot: Number of applications in Neo bank")
+```
+The above graph shows the cyclical nature of the data across the months for 2017 to 2019. 
+```{r}
+# # 3. Seasonal sub series plots
+# 
+# options(repr.plot.width=57 ,repr.plot.height= 10)
+# data_1 %>%
+#   gg_subseries(no_of_applicants_sum) +
+#   labs(
+#     y = "Total number of applications",
+#     title = "Number of applications in Neo bank"
+#   )
+
+#Segment+ Zone 
+ggplot(Segment1, aes(x = application_date, y = no_of_applicants)) +
+geom_line() +
+facet_wrap( ~ segment + zone, scales = "free_y", ncol = 5)+
+theme(axis.text.x=element_text(angle=90))
+```
+From the data we observe the key region for maximum no.of applications North for the future where the bank may expect higher applications.
+
+```{r}
+# data_2 %>%
+#   gg_subseries(no_of_applicants_sum) +
+#   labs(
+#     y = "Total number of applications",
+#     title = "Number of applications in Neo bank"
+#   )
+
+month_summary <-Segment1 %>% 
+                    group_by(Month) %>%
+                    summarise(no_of_applicants= sum(no_of_applicants),.groups='drop') 
+month_summary %>%
+         ggplot(aes(x = reorder(Month, no_of_applicants), y = no_of_applicants, fill = Month)) +
+         geom_col() +
+         scale_fill_hp_d(option = "RonWeasley") +
+         scale_fill_brewer(palette = "Set3") +
+         scale_y_continuous(limits = c(0, 300000), expand = c(0,0)) +
+         labs(title = "Total number of applicants in  each month", x = "Month", y = "Total applicants") +
+         theme_classic() 
+```
+We observe that the bank receives the highest number of applications in October across the three years. Though may vary region wise and state wise.We observe maximum banking activity starting from end of the financial year.
+
+```{r include=FALSE}
+ggplot(train, aes(x=(Holiday), fill=(Holiday) )) +
+geom_bar() +
+scale_fill_brewer(palette = "Set3") +
+labs(x='Holiday',y='Number of Applications') +
+theme_minimal()+
+theme(legend.position="none")
+```
+
+```{r}
+data%>%
+  pivot_wider(values_from=no_of_applicants, names_from=state)%>% 
+  GGally::ggpairs(columns = 2:9)
+```
+
+
+
+# 5. Lag plots
+```{r echo=FALSE,include=FALSE}
+options(repr.plot.width=50 ,repr.plot.height= 10)
+data_1 %>%
+  gg_lag(no_of_applicants_sum, geom = "point") +
+  labs(x = "lag(Total number of applications, k)")
+
+```
+
+```{r echo=FALSE,include=FALSE}
+data_2 %>%
+  gg_lag(no_of_applicants_sum, geom = "point") +
+  labs(x = "lag(Total number of applications, k)")
+```
+
+> COMPONENTS OF THE TIME SERIES FOR EACH SEGMENT
+
+We attempt to analyze three main components of the time series to analyze how they behave over time-
+
+> Seasonal Component
+
+> Trend Cycle Component
+
+> Remainder Component
+
+
+
+>SEGMENT1
+
+For Segment 1 we observe a linear trend from the time period 2017 to 2019.There is an inconsistent yearly seasonality since the gaps are wide at  certain points.Throughout the year we see outliers mainly in the Quarter 3.The yearly seasonality shows that the peak business period to be mainly in the months of August-September-October-November for Segment 1 customers.The residual part removes the residual and trend component from the data and seasonally adjusted data shows a  variation in the number of application received thus the seasonality plays a major role in the business problem under consideration for Segment 1 customers.
+
+```{r include=FALSE}
+dcmp <- data_1%>%
+  model(stl = STL(no_of_applicants_sum))
+```
+
+
+```{r echo=FALSE}
+components(dcmp) %>% autoplot()
+
+```
+
+
+```{r include=FALSE}
+dcmp <- data_2%>%
+  model(stl = STL(no_of_applicants_sum))
+```
+
+> SEGMENT 2
+
+```{r}
+components(dcmp) %>% autoplot()
+```
+
+On decomposing the data under Segment 2 we observe that there is a monthly seasonality we observe through out the years. The weekly seasonality is also significant since the gaps are neither close by nor wide. The trend that we observe is mostly horizontal through each year and tends to have a long term upward trend from 2017 through 2018 from 2018 we observe a downward trend.On removing the seasonality and trend the seasonally adjusted data shows more number of changing levels/points.
+
+# CHOICE OF MODELS
+
+
+
+# ACF and PACF plots
+
+
+If the autocorrelation plot of acf crosses the dashed blue line, it means that specific lag is significantly correlated with current series.
+
+From here, we can observe that there is approx peak at 0,30,60,90... lags. The maximum at lag 0,30,60.. indicates a positive relationship with monthly cycle.
+
+Here, instead of tailing-off if there is a slow decay we can say it to be a non- stationary series. Examining ACF and PACF helps us to estimate plausible models and select p,d and q. Differencing may be needed if there is slow- decay in the ACF. Several models may need to be estimated. So, here we will try out different combinations of p,d and q to get model with lower AIC or BIC score. AIC and BIC are two measures of goodness of fit. They measure the trade-off between model fit and complexity of data. A lower AIC or BIC value indicates a better fit.
+
+```{r echo=FALSE}
+par(mfrow=c(2,2))
+a=data_1 %>% tsibble::fill_gaps() %>%
+  ACF(no_of_applicants_sum) %>%
+  autoplot() +
+  labs(title="ACF for Segment 1")
+
+b=data_1 %>% tsibble::fill_gaps() %>%
+  PACF(no_of_applicants_sum) %>%
+  autoplot() +
+  labs(title="PACF for Segment 1")
+
+c=data_2 %>% tsibble::fill_gaps() %>%
+  ACF(no_of_applicants_sum) %>%
+  autoplot() +
+  labs(title="ACF for Segment 2")
+
+d=data_2 %>% tsibble::fill_gaps() %>%
+  PACF(no_of_applicants_sum) %>%
+  autoplot() +
+  labs(title="PACFfor Segment 2")
+
+```
+```{r}
+#install.packages('patchwork')
+library(patchwork)
+
+a+ b +c +d
+
+```
+
+#TSLM Modeling
+
+TSLM modeling: In this case the model function is TSLM() (time series linear model), the response variable is no_of_applicants and it is being modeled using trend() (a “special” function specifying a linear trend when it is used within TSLM()).
+First of all linear model on segment 1 is applied.
+
+```{r echo=False}
+fit <- data_1 %>%
+  model(trend_model = TSLM(no_of_applicants_sum ~ trend()))
+fit %>% forecast(h = 30)
+```
+
+
+```{r echo=False}
+fit %>%
+  forecast(h = 30) %>%
+  autoplot(data_1)
+fore<-fit %>% forecast(h=30)
+```
+  
+  
+Here, we can observe approx value of future predictions for next 30 days.
+
+Next, same process is applied on segment 2 dataset, and approx number of applicants is observed.
+
+
+```{r echo=False}
+fit <- data_2 %>%
+  model(trend_model = TSLM(no_of_applicants_sum ~ trend()))
+fit %>% forecast(h = 30)
+```
+
+
+```{r echo=False}
+fit %>%
+  forecast(h = 30) %>%
+  autoplot(data_2)
+fore1<-fit %>% forecast(h=30)
+```
+From here, we can observe approx values of number of applicants for next 30 days for segment 2. Each row corresponds to one forecast period for each day. The no_of_applicants column contains the forecast distribution, while the .mean column contains the point forecast. The point forecast is the mean (or average) of the forecast distribution.
+
+```{r echo=FALSE}
+
+df_s <- data.frame(id = c(1:60),
+                 no_of_applicants = c(tail(fore$.mean,30), tail(fore1$.mean,30))
+                 )
+write.csv(df_s,"", row.names = FALSE)
+```
+
+Finally, we combine dataset for next 30 days for segment 1 and 2.
+
+# Dickey fuller test
+
+```{r echo=FALSE}
+adf.test(data_1$no_of_applicants_sum)
+```
+Here, null hypothesis is that time series is not stationary.If null hypothesis is rejected, then target variable is stationary. If it's not rejected, we should do differencing and then perform dickey-fuller test again. Here, p-value is less than 0.05, so we can reject null hypothesis and say that series is stationary enough to do any kind of time series modeling.
+
+
+#AR
+In order to fit the AR model, we have initially converted the number of applicants
+column to a vector. To see the lag value to be used in the AR model, we have used
+the above function that has given a value of 7.
+Hence, we fit a AR(7) model.
+
+```{r echo=FALSE, include=FALSE}
+ data_vec <- as.vector(data_1["no_of_applicants_sum"])
+ data_vec.ar <- ar(data_vec$no_of_applicants_sum, method = "mle")
+ data_vec.ar$order
+
+```
+```{r include=FALSE}
+data_vec.ar$ar
+```
+```{r include=FALSE}
+seg1_ar<-arima(data_vec$no_of_applicants_sum,c(7,0,0))
+seg1_forecast <- predict(seg1_ar, n.ahead = 30)
+seg1_forecast_values <- seg1_forecast$pred
+seg1_forecast_values
+```
+Using the predict function, the total number of applications for the next 30 days
+is forecasted. The (7,0,0) component in arima function is same as fitting a
+7th order Autoregressive model. The AIC score for segment 1 data is equal to
+```{r}
+AIC(seg1_ar)
+```
+
+The steps are similarly followed for segment 2 data as well. The AIC score for
+Segment 2 is found to be 
+```{r echo=FALSE, include=FALSE}
+seg2_ar<-arima(data_2$no_of_applicants_sum,c(7,0,0))
+seg2_forecast <- predict(seg2_ar, n.ahead = 30)
+seg2_forecast_values <- seg2_forecast$pred
+seg2_forecast_values
+
+```
+```{r echo=FALSE}
+AIC(seg2_ar)
+
+```
+# Arima Modeling
+
+While exponential smoothing models are based on a description of the trend and seasonality in the data, ARIMA models aim to describe the autocorrelations in the data. White noise describes the assumption that each element in a series is a random draw from a population with zero mean and constant variance. Autoregressive(AR) and moving average(MA) models correct for violations of this white noise assumption.
+
+As our model satisfies stationarity, we move on to applying arima modeling on it. 
+## Applying arima modeling on segment 1
+```{r echo=FALSE}
+fit <- data_1 %>%
+  model(ARIMA(no_of_applicants_sum))
+report(fit)
+```
+
+```{r echo=False}
+fit %>% forecast(h=30) %>%
+  autoplot(data_1)
+fore<-fit %>% forecast(h=30)
+```
+
+
+## Applying arima modeling on segment 2
+```{r echo=FALSE}
+fit <- data_2 %>%
+  model(ARIMA(no_of_applicants_sum))
+report(fit)
+```
+
+```{r echo=False}
+fit %>% forecast(h=30) %>%
+  autoplot(data_2)
+fore1<-fit %>% forecast(h=30)
+```
+
+```{r echo=FALSE}
+
+df_s <- data.frame(id = c(1:60),
+                 no_of_applicants = c(tail(fore$.mean,30), tail(fore1$.mean,30))
+                 )
+write.csv(df_s,"C:\\Users\\asus\\Desktop\\College\\3rd semester\\Time series-Akhileshwar\\arima_final.csv", row.names = FALSE)
+
+```
+Here, we observe that we get better predictions from ARIMA than we got from TSLM model. This can be observed from plots as well.
+
+# ARIMA (Without seasonality)
+
+Though we got our data as stationary, but plots appeared to have some sort of seasonality. So, we went ahead to use arima by removing seasonality.
+In segment 1
+
+```{r echo=FALSE}
+stlTrain = stl(data_11,s.window="periodic")
+tsTrainWithoutSeasonal = stlTrain$time.series[,2]+stlTrain$time.series[,3]
+
+```
+
+
+
+```{r echo=FALSE}
+data_x<-data_11%>%mutate(no_of_applicants_sum=tsTrainWithoutSeasonal)
+fit <- data_x %>%
+  model(ARIMA(no_of_applicants_sum))
+report(fit)
+```
+Here, we observe that AIC and BIC value decreases, which shows that this is a better model if we remove seasonality.
+
+```{r echo=False}
+fit %>% forecast(h=30) %>%
+  autoplot(data_x)
+```
+
+
+
+```{r echo=FALSE}
+fore<-fit %>% forecast(h=30)
+```
+
+
+
+
+# Removing seasonality from segment 2
+
+```{r echo=FALSE}
+stlTrain = stl(data_22,s.window="periodic")
+tsTrainWithoutSeasonal = stlTrain$time.series[,2]+stlTrain$time.series[,3]
+
+```
+
+```{r echo=FALSE}
+data_xx<-data_22%>%mutate(no_of_applicants_sum=tsTrainWithoutSeasonal)
+fit <- data_xx %>%
+  model(ARIMA(no_of_applicants_sum))
+report(fit)
+```
+Here, we observe that AIC and BIC value both decreases when we remove seasonality from data, which shows that this is a better model.
+
+```{r echo=False}
+fit %>% forecast(h=30) %>%
+  autoplot(data_xx)
+```
+
+
+
+```{r echo=FALSE}
+fore1<-fit %>% forecast(h=30)
+df_s <- data.frame(id = c(1:60),
+                 no_of_applicants = c(tail(fore$.mean,30), tail(fore1$.mean,30))
+                 )
+write.csv(df_s,"D:\\TimeSeries_Task\\arimawithoutseason_new.csv", row.names = FALSE)
+
+```
+
+
+# Checking for Trend in data
+
+First off, I'd take the difference of time series to de-trend it, it has a considerable stochastic trend. The most obvious sign of this, beside the time series having a steady upward rise, is that the ACF components takes a long time to die out. While we can fit a model to the data as is with a drift term, it's much easier to read the ACF and PACF plots when the trend isn't there. So, we also tried to overcome presence of small amount of trend by two methods(differencing and removing trend component from stl decomposition as well).
+
+Data after differencing
+
+Here, we try to observe ACF and PACF model after differencing.
+
+```{r echo=False}
+tf.d <- diff(data_1$no_of_applicants_sum)
+plot(tf.d); acf(tf.d, main=""); pacf(tf.d, main="")
+#pacf(data_1$no_of_applicants_sum)
+```
+
+
+
+```{r echo=False}
+data_1 %>%
+  gg_tsdisplay(difference(no_of_applicants_sum), plot_type='partial')
+```
+
+Further, we just work on remainder time series, by removing trend and seasonality.
+
+# Removing trend and seasonality from data
+We start with segment 1
+
+```{r echo=FALSE}
+stlTrain = stl(data_11,s.window="periodic")
+tsTrainWithouttrendSeasonal = stlTrain$time.series[,3]
+
+```
+
+```{r echo=FALSE}
+data_x<-data_11%>%mutate(no_of_applicants_sum=tsTrainWithouttrendSeasonal)
+fit <- data_x %>%
+  model(ARIMA(no_of_applicants_sum))
+report(fit)
+```
+
+
+```{r echo=False}
+fit %>% forecast(h=30) %>%
+  autoplot(data_x)
+```
+
+
+
+```{r echo=FALSE}
+fore<-fit %>% forecast(h=30)
+
+```
+
+
+For segment 2
+
+```{r echo=FALSE}
+stlTrain = stl(data_22,s.window="periodic")
+tsTrainWithouttrendSeasonal = stlTrain$time.series[,3]
+```
+
+```{r echo=FALSE}
+data_xx<-data_22%>%mutate(no_of_applicants_sum=tsTrainWithouttrendSeasonal)
+fit <- data_xx %>%
+  model(ARIMA(no_of_applicants_sum))
+report(fit)
+```
+
+```{r echo=False}
+fit %>% forecast(h=30) %>%
+  autoplot(data_xx)
+```
+
+
+
+```{r echo=FALSE}
+fore1<-fit %>% forecast(h=30)
+
+```
+```{r echo=FALSE}
+
+df_s <- data.frame(id = c(1:60),
+                 no_of_applicants = c(tail(fore$.mean,30), tail(fore1$.mean,30))
+                 )
+write.csv(df_s,"D:\\TimeSeries_Task\\arimawithoutseasontrend_new.csv", row.names = FALSE)
+
+```
+Removing trend and seasonality, aic and bic value reduces a lot, but when we observe it's predictions we see that it has negative values, which doesn't make sense. So, instead we should try INARIMA model here, to make sure that our output is positive only which can be done as future work.
+
+
+
+# HOLT WINTER'S EXPONENTIAL SMOOTHING 
+
+This method uses two parameters, one for the overall smoothing and the other for the trend smoothing equation. The method is also called double exponential smoothing or trend-enhanced exponential smoothing.For the given data we observe the data the component are additive hence we follow the additive method.
+This method is used since the forecast is for a short period and it doesn't work well for long term predictions.
+
+
+
+```{r echo=FALSE}
+library(tidyverse)
+holt <- holt(data_1$no_of_applicants_sum,
+                  h = 30)
+autoplot(holt)
+
+```
+Here we observe the error rate increasing over time and after differentiation too the model captures only 
+
+```{r echo=FALSE,include=FALSE}
+# removing the trend
+data_1.dif <- diff(data_1$no_of_applicants_sum)
+autoplot(data_1.dif)
+  
+# reapplying SES on the filtered data
+ses.data_1.dif <- ses(data_1.dif,
+                    alpha = .2, 
+                    h = 100)
+autoplot(ses.data_1.dif)
+```
+```{r}
+library(patchwork)
+e=autoplot(data_1.dif)
+f=autoplot(ses.data_1.dif)
+e
+f
+```
+
+
+```{r echo=FALSE}
+holt1 <- holt(data_2$no_of_applicants_sum,
+                  h = 30)
+autoplot(holt1)
+```
+
+
+
+
+
+
+
+
+# SARIMAX 
+Seasonal Auto-Regressive Integrated Moving Average with exogenous factors, or SARIMAX, is an extension of the ARIMA class of models. SARIMAX has the capability to handle exogenous variable like holidays. We
+can also get your own domain-specific features if you need to. In our case, we combined the original data with Indian holidays and built a SARIMAX model.
+
+
+
+Initially the binary variables in Holiday column was converted to 1s and 0s from yes and no.
+This data is added as the exogenous variable into the ARIMAX model, making it SARIMAX.We use the method Maximum Likelihood Estimate to make the predictions.
+Fitting SARIMAX model with seasonal ARIMA order (2,2,0) for segment 1 and (4,2,0) for segment 2.
+
+For Segment 1:
+```{r message= FALSE,include=FALSE}
+inf <- ts(data_1$no_of_applicants_sum, start = c(2017,4,1),end=c(2019,6,5) ,frequency=365)
+#inf
+rinf <- ts(data_1$Holiday, start = c(2017,4,1),end=c(2019,6,5) ,frequency=365)
+#rinf
+#class(rinf)
+#Fitting SARIMAX model with seasonal ARIMA order (1,0,1) & estimation method is MLE (or ML) -->
+
+#install.packages("TSA") 
+
+library(TSA) 
+
+model_ts=arimax((inf), order=c(0,1,1), seasonal=list(order=c(0,1,1), period=12), xreg=rinf, method='ML')
+```
+```{r}
+model_ts
+
+``` 
+
+And a BIC score of :
+
+
+
+
+```{r}
+BIC(model_ts)
+```
+For Segment 2
+```{r include=FALSE}
+iinf <- ts(data_2$no_of_applicants_sum, start = c(2017,4,1),end=c(2019,6,5) ,frequency=365)
+#inf
+rrinf <- ts(data_2$Holiday, start = c(2017,4,1),end=c(2019,6,5) ,frequency=365)
+#rinf
+#class(rinf)
+#Fitting SARIMAX model with seasonal ARIMA order (1,0,1) & estimation method is MLE (or ML) -->
+
+#install.packages("TSA") 
+
+library(TSA) 
+
+model_ts1=arimax((iinf), order=c(4,2,0), seasonal=list(order=c(4,2,0), period=12), xreg=rrinf, method='ML')
+```
+```{r}
+model_ts1
+```
+
+
+```{r}
+BIC(model_ts1)
+```
+
+# Conclusion
+
+From the above analysis we conclude that the model that better explains the above data is ARIMA.By changing the values (p,d,q) we can find the optimal value using the AIC and the BIC score  which can help us in forecasting accurately.We learnt about dealing with trend and seasonality .The model can be improved further using residual components.
+
+
+
+
+
+
+
